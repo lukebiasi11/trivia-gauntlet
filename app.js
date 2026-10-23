@@ -44,7 +44,26 @@ const store = {
   get(k, def) { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 };
-let session = null; // {day, practice, scores:[], details:[]}
+let session = null;
+let onKey = null; // per-screen physical keyboard handler
+document.addEventListener("keydown", e => {
+  if (!onKey || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.matches && e.target.matches("input,textarea")) return;
+  if (onKey(e) !== false) { if (/^[a-z]$/i.test(e.key) || ["Backspace", "Enter", " "].includes(e.key)) e.preventDefault(); }
+});
+function countUp(el, to, ms = 900) {
+  const t0 = performance.now();
+  const step = t => { const k = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt(to * e); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+function burst(x, y, n = 18) {
+  const cols = ["#00f0ff", "#ff2fd6", "#ffe600", "#39ff88"];
+  for (let i = 0; i < n; i++) {
+    const p = h("i", { class: "spark" }); const a = Math.random() * 6.28, d = 40 + Math.random() * 70;
+    p.style.cssText = `left:${x}px;top:${y}px;background:${cols[i % 4]};--dx:${Math.cos(a) * d}px;--dy:${Math.sin(a) * d}px`;
+    document.body.append(p); setTimeout(() => p.remove(), 700);
+  }
+} // {day, practice, scores:[], details:[]}
 
 function newSession(practice) {
   const day = practice ? Math.floor(Math.random() * 1000) : dayIndex();
@@ -75,7 +94,8 @@ function Timer(seconds, onEnd, parent) {
 }
 
 function screen(title, sub) {
-  app.innerHTML = "";
+  onKey = null;
+  app.innerHTML = ""; app.classList.remove("enter"); void app.offsetWidth; app.classList.add("enter");
   const cat = session && CATS[session.scores.length];
   const head = h("header", { class: "game-head" },
     h("div", { class: "crumb" }, session.practice ? "Practice" : "Daily Gauntlet", " · ", (session.scores.length + 1) + "/5"),
@@ -87,14 +107,17 @@ function screen(title, sub) {
 }
 function feedback(parent, ok, text) {
   const f = h("div", { class: "fb " + (ok === true ? "good" : ok === false ? "bad" : "neutral") }, text);
-  parent.append(f); return f;
+  parent.append(f);
+  if (ok === true) { const r = f.getBoundingClientRect(); burst(r.left + r.width / 2, r.top + r.height / 2); }
+  else if (ok === false) { document.body.classList.remove("flash-bad"); void document.body.offsetWidth; document.body.classList.add("flash-bad"); }
+  return f;
 }
 function nextBtn(parent, label, fn) { const b = h("button", { class: "btn primary big", onclick: fn }, label); parent.append(b); b.focus({ preventScroll: true }); return b; }
 
 // ---------- home ----------
 function home() {
-  session = null;
-  app.innerHTML = "";
+  session = null; onKey = null;
+  app.innerHTML = ""; app.classList.remove("enter"); void app.offsetWidth; app.classList.add("enter");
   const s = store.get("dg-" + todayKey());
   const done = s && s.scores.length === 5;
   const stats = store.get("dg-stats", { played: 0, best: 0, streak: 0, last: null });
@@ -176,8 +199,68 @@ function runNext() {
   catIntro(i, go);
 }
 function catDone(body, score, detail) {
-  body.append(h("div", { class: "cat-score" }, h("small", {}, "Category score"), h("b", {}, fmt(score)), h("small", {}, "/ 1,000")));
+  const b = h("b", {}, "0");
+  body.append(h("div", { class: "cat-score" }, h("small", {}, "Category score"), b, h("small", {}, "/ 1,000")));
+  countUp(b, score);
   nextBtn(body, session.scores.length === 4 ? "See final results" : "Next: " + CATS[session.scores.length + 1].name + " →", () => finishCat(score, detail));
+}
+
+// ---------- maps ----------
+function leafletMap(el, onPick) {
+  const L = window.L;
+  const map = L.map(el, { worldCopyJump: false, minZoom: 1, maxZoom: 9, zoomSnap: 0.5, maxBounds: [[-85, -200], [85, 200]], maxBoundsViscosity: 1, attributionControl: true, tap: true });
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+    noWrap: true, bounds: [[-85.05, -180], [85.05, 180]], maxZoom: 16,
+    attribution: 'Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors'
+  }).addTo(map);
+  map.fitBounds([[-55, -170], [75, 175]]);
+  setTimeout(() => map.invalidateSize(), 60);
+  const icon = cls => L.divIcon({ className: "", html: `<div class="lpin ${cls}"></div>`, iconSize: [22, 22], iconAnchor: [11, 11] });
+  let mk = null, locked = false;
+  map.on("click", e => {
+    if (locked) return;
+    const ll = e.latlng.wrap();
+    if (mk) mk.setLatLng(e.latlng); else mk = L.marker(e.latlng, { icon: icon("guess") }).addTo(map);
+    onPick({ lat: ll.lat, lon: ll.lng });
+  });
+  return { reveal(t, g) {
+    locked = true;
+    const tm = L.marker([t.lat, t.lon], { icon: icon("target") }).addTo(map);
+    if (g) {
+      const gl = mk.getLatLng();
+      L.polyline([gl, [t.lat, t.lon]], { color: "#ff2fd6", weight: 3, dashArray: "8 8" }).addTo(map);
+      map.flyToBounds(L.latLngBounds([gl, [t.lat, t.lon]]).pad(0.4), { duration: 0.8, maxZoom: 6 });
+    } else map.flyTo([t.lat, t.lon], 4, { duration: 0.8 });
+    tm.bindTooltip(t.name, { permanent: true, direction: "top", className: "ltip", offset: [0, -10] });
+  } };
+}
+// Offline fallback (used only if Leaflet can't load): neon SVG map with zoom buttons.
+function svgMap(el, onPick) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  let vb = [0, 0, 1000, 500];
+  svg.setAttribute("class", "map");
+  svg.innerHTML = `<rect x="-500" y="-500" width="2000" height="1500" class="sea"/><path class="land" d="${window.LAND_PATH}"/><g class="marks"></g>`;
+  const setVB = () => svg.setAttribute("viewBox", vb.join(" "));
+  setVB();
+  const zoom = f => { const cx = vb[0] + vb[2] / 2, cy = vb[1] + vb[3] / 2; vb[2] = Math.min(1000, Math.max(80, vb[2] * f)); vb[3] = vb[2] / 2; vb[0] = cx - vb[2] / 2; vb[1] = cy - vb[3] / 2; setVB(); };
+  el.append(svg, h("div", { class: "zbtns" }, h("button", { onclick: () => zoom(0.6) }, "+"), h("button", { onclick: () => zoom(1 / 0.6) }, "−")));
+  const marks = svg.querySelector(".marks");
+  const toXY = p => [(p.lon + 180) / 360 * 1000, (90 - p.lat) / 180 * 500];
+  const r = () => vb[2] / 120;
+  const draw = (p, cls) => { const [x, y] = toXY(p); const c = document.createElementNS(NS, "circle"); c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", r()); c.setAttribute("class", "spin " + cls); marks.append(c); };
+  let locked = false, down = null;
+  svg.addEventListener("pointerdown", e => { down = { x: e.clientX, y: e.clientY, vb: vb.slice() }; svg.setPointerCapture(e.pointerId); });
+  svg.addEventListener("pointermove", e => { if (!down) return; const k = vb[2] / svg.clientWidth; vb[0] = down.vb[0] - (e.clientX - down.x) * k; vb[1] = down.vb[1] - (e.clientY - down.y) * k; setVB(); });
+  svg.addEventListener("pointerup", e => {
+    const moved = down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6; down = null;
+    if (moved || locked) return;
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const g = { lon: Math.max(-180, Math.min(180, p.x / 1000 * 360 - 180)), lat: Math.max(-90, Math.min(90, 90 - p.y / 500 * 180)) };
+    marks.innerHTML = ""; draw(g, "guess"); onPick(g);
+  });
+  return { reveal(t, g) { locked = true; draw(t, "target"); if (g) { const [x1, y1] = toXY(g), [x2, y2] = toXY(t); const l = document.createElementNS(NS, "line"); Object.entries({ x1, y1, x2, y2, class: "dist" }).forEach(([k, v]) => l.setAttribute(k, v)); marks.prepend(l); } } };
 }
 
 // ---------- 1. World Rush ----------
@@ -194,37 +277,24 @@ function worldRush() {
   const doPin = () => {
     const target = set.pins[step];
     const body = screen("🌎 World Rush", "Pin " + (step + 1) + " of 2 · up to 450 pts");
-    body.append(h("p", { class: "prompt" }, "Where is ", h("b", {}, target.name), "?"));
-    const NS = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(NS, "svg");
-    svg.setAttribute("viewBox", "0 0 1000 500"); svg.setAttribute("class", "map");
-    svg.innerHTML = `<rect width="1000" height="500" class="sea"/><g class="grat">${[...Array(11)].map((_, i) => `<line x1="${i * 100}" y1="0" x2="${i * 100}" y2="500"/>`).join("")}${[...Array(5)].map((_, i) => `<line x1="0" y1="${i * 100 + 50}" x2="1000" y2="${i * 100 + 50}"/>`).join("")}</g><path class="land" d="${window.LAND_PATH}"/><g class="marks"></g>`;
-    const wrap = h("div", { class: "map-wrap" }, svg);
-    body.append(wrap);
-    let guess = null, locked = false;
-    const marks = svg.querySelector(".marks");
-    const toXY = p => [(p.lon + 180) / 360 * 1000, (90 - p.lat) / 180 * 500];
-    const drawPin = (p, cls) => { const [x, y] = toXY(p); const g = document.createElementNS(NS, "g"); g.setAttribute("class", cls); g.innerHTML = `<circle cx="${x}" cy="${y}" r="9" class="halo"/><circle cx="${x}" cy="${y}" r="5"/>`; marks.append(g); };
-    svg.addEventListener("click", e => {
-      if (locked) return;
-      const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
-      const p = pt.matrixTransform(svg.getScreenCTM().inverse());
-      guess = { lon: p.x / 1000 * 360 - 180, lat: 90 - p.y / 500 * 180 };
-      marks.innerHTML = ""; drawPin(guess, "pin guess"); btn.disabled = false;
-    });
-    const btn = h("button", { class: "btn primary big", disabled: true, onclick: () => submit() }, "Lock in pin");
+    body.append(h("p", { class: "prompt" }, "Where is ", h("b", { class: "hl" }, target.name), "?"),
+      h("p", { class: "hint-sm" }, "Tap to drop your pin · pinch or scroll to zoom · drag to pan"));
+    const mapEl = h("div", { class: "lmap" });
+    body.append(h("div", { class: "map-wrap" }, mapEl));
+    let guess = null, locked = false, api;
+    const btn = h("button", { class: "btn primary big", disabled: true, onclick: () => submit() }, "📍 Lock in pin");
     body.append(btn);
+    const onPick = p => { if (locked) return; guess = p; btn.disabled = false; };
+    api = window.L ? leafletMap(mapEl, onPick) : svgMap(mapEl, onPick);
     const timer = Timer(TBD.pin, () => submit(), body.parentNode.querySelector(".game-head"));
     function submit() {
       if (locked) return; locked = true; timer.stop(); btn.remove();
-      drawPin(target, "pin target");
       let pts = 0, msg;
       if (guess) {
         const d = haversine(guess, target); pts = pinPoints(d);
-        const [x1, y1] = toXY(guess), [x2, y2] = toXY(target);
-        const l = document.createElementNS(NS, "line"); Object.entries({ x1, y1, x2, y2, class: "dist" }).forEach(([k, v]) => l.setAttribute(k, v)); marks.prepend(l);
-        msg = `${fmt(d)} km away → ${pts} pts`;
-      } else msg = "Time's up — no pin placed → 0 pts";
+        msg = `${fmt(d)} km away → +${pts}`;
+      } else msg = "Time's up — no pin placed → +0";
+      api.reveal(target, guess);
       total += pts; log.push(pts);
       feedback(body, pts > 300 ? true : pts > 0 ? null : false, msg);
       step++;
@@ -389,6 +459,13 @@ function wordFlip() {
     body.append(h("ul", { class: "review" }, list.map(([w], k) => h("li", { class: results[k] ? "ok" : "no" }, (results[k] ? "✓ " : "✗ ") + w))));
     catDone(body, total, "flip");
   };
+  onKey = e => {
+    if (over) return false;
+    if (e.key === "Backspace") { built.pop(); draw(); return; }
+    if (/^[a-z]$/i.test(e.key)) { const k = letters.findIndex((l, idx) => l.c === e.key.toUpperCase() && !built.includes(idx)); if (k >= 0) { built.push(k); draw(); check(); } return; }
+    return false;
+  };
+  body.append(h("p", { class: "kbd-tip" }, "⌨️ Type letters on your keyboard · Backspace to undo"));
   const timer = Timer(60, end, body.parentNode.querySelector(".game-head"));
   load();
 }
@@ -480,8 +557,7 @@ function anagramRush() {
   const body = screen("📝 Anagram Rush", "6 letters · 60 seconds");
   let letters = shuffle(set.letters.split(""), rng(session.day)), built = [], found = [], raw = 0, over = false;
   const scoreEl = h("div", { class: "raw" }), cur = h("div", { class: "slots" }), tiles = h("div", { class: "tiles" }), list = h("div", { class: "found" });
-  const input = h("input", { class: "txt", placeholder: "…or type a word", autocomplete: "off", autocapitalize: "off", spellcheck: "false" });
-  const form = h("form", { class: "answer", onsubmit: e => { e.preventDefault(); if (input.value.trim()) { tryWord(input.value); input.value = ""; } else tryWord(built.map(k => letters[k]).join("")); } }, input, h("button", { class: "btn primary", type: "submit" }, "Enter"));
+  const form = h("p", { class: "kbd-tip" }, "⌨️ Type letters · Enter to submit · Backspace to delete · Space to shuffle");
   const ctrls = h("div", { class: "row" }, h("button", { class: "btn", onclick: () => { letters = shuffle(letters); built = []; draw(); } }, "🔀 Shuffle"), h("button", { class: "btn", onclick: () => { built = []; draw(); } }, "Clear"), h("button", { class: "btn primary", onclick: () => tryWord(built.map(k => letters[k]).join("")) }, "Submit word"));
   body.append(scoreEl, cur, tiles, ctrls, form, list);
   const draw = () => {
@@ -506,6 +582,14 @@ function anagramRush() {
     const conv = Math.min(1000, Math.round(raw / target * 1000));
     body.append(h("div", { class: "cat-score" }, h("small", {}, "Your Anagram Rush score"), h("b", {}, fmt(raw)), h("small", {}, "points")));
     nextBtn(body, "Next: Think Fast →", () => finishCat(conv, "anag raw " + raw));
+  };
+  onKey = e => {
+    if (over) return false;
+    if (e.key === "Enter") { tryWord(built.map(k => letters[k]).join("")); return; }
+    if (e.key === "Backspace") { built.pop(); draw(); return; }
+    if (e.key === " ") { letters = shuffle(letters); built = []; draw(); return; }
+    if (/^[a-z]$/i.test(e.key)) { const k = letters.findIndex((l, idx) => l === e.key.toUpperCase() && !built.includes(idx)); if (k >= 0) { built.push(k); draw(); } else { cur.classList.add("shake"); setTimeout(() => cur.classList.remove("shake"), 300); } return; }
+    return false;
   };
   const timer = Timer(60, end, body.parentNode.querySelector(".game-head"));
   draw();
@@ -537,13 +621,15 @@ function results() {
   const share = `Daily Gauntlet ${session.practice ? "(practice)" : session.key}\n${session.scores.map((s, i) => CATS[i].icon + " " + blocks(s) + " " + s).join("\n")}\n🏁 ${tot.toLocaleString()} / 5,000`;
   app.append(
     h("div", { class: "hero small" }, h("div", { class: "logo" }, "DAILY", h("span", {}, "GAUNTLET")), h("p", { class: "tag" }, session.practice ? "Practice run complete" : "Today's Gauntlet complete")),
-    h("div", { class: "final" }, h("small", {}, "Final score"), h("b", {}, fmt(tot)), h("small", {}, "/ 5,000")),
+    h("div", { class: "final" }, h("small", {}, "Final score"), h("b", { id: "finalnum" }, "0"), h("small", {}, "/ 5,000")),
     h("ol", { class: "path" }, CATS.map((c, i) => h("li", { class: "step done" }, h("span", { class: "num" }, blocks(session.scores[i])), h("span", { class: "ic" }, c.icon), h("span", { class: "nm" }, h("b", {}, c.name), c.id === "word" ? h("small", {}, wordGameFor(session.day).name) : null), h("span", { class: "pts" }, fmt(session.scores[i]))))),
     h("pre", { class: "share" }, share),
     h("div", { class: "row center" },
       h("button", { class: "btn primary", onclick: async e => { try { if (navigator.share) await navigator.share({ text: share }); else { await navigator.clipboard.writeText(share); e.target.textContent = "Copied!"; } } catch {} } }, "Share result"),
       h("button", { class: "btn", onclick: home }, "Home")),
     h("p", { class: "fine" }, "Global & friends leaderboards arrive with accounts in a future version."));
+  countUp($("#finalnum"), tot, 1600);
+  setTimeout(() => { const r = $("#finalnum").getBoundingClientRect(); burst(r.left + r.width / 2, r.top + r.height / 2, 40); }, 1600);
 }
 
 document.addEventListener("click", e => { if (e.target.closest(".brand")) { if (!session || confirm("Leave this game? Progress in the current category is lost.")) home(); } });

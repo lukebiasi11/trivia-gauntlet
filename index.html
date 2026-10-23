@@ -3,15 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0f1222">
+<meta name="theme-color" content="#07031a">
 <title>Daily Gauntlet — the daily brain challenge</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏁</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=Bungee+Shade&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav class="top"><a class="brand" href="#" onclick="return false">🏁 Daily<b>Gauntlet</b></a><span class="beta">BETA</span></nav>
+<div class="bg-grid" aria-hidden="true"></div>
+<nav class="top"><a class="brand" href="#" onclick="return false"><span class="bolt">⚡</span>DAILY<b>GAUNTLET</b></a><span class="beta">BETA</span></nav>
 <main id="app"></main>
 <noscript>Daily Gauntlet needs JavaScript.</noscript>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script src="map.js"></script>
 <script src="anagrams.js"></script>
 <script src="content.js"></script>
